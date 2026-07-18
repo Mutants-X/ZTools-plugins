@@ -1,13 +1,24 @@
 #!/usr/bin/env node
-import { createWriteStream, existsSync } from 'node:fs';
-import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import * as asar from '@electron/asar';
+import extractZip from 'extract-zip';
+import { createReadStream, createWriteStream, existsSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
+import {
+  constants as zlibConstants,
+  createBrotliCompress,
+  createBrotliDecompress,
+} from 'node:zlib';
 
 const DIST_DIR = 'dist';
+const PLUGINS_JSON_FILE_NAME = 'plugins.json';
+const ZPX_PLUGINS_JSON_FILE_NAME = 'plugins-zpx.json';
 const PUBLIC_ASSET_BASE_URL = 'https://ztools.zosen.link';
 const ZTOOLS_SERVER_URL = process.env.ZTOOLS_SERVER_URL || 'https://z-tools.top';
 const ZTOOLS_SERVER_TOKEN = process.env.ZTOOLS_SERVER_TOKEN || '';
@@ -26,6 +37,7 @@ function printUsage() {
 
 说明:
   匿名获取当前 GitHub 仓库的最新 release，并将所有 assets 下载到 dist 目录。
+  会保留插件 ZIP，同时生成同名 ZPX 和使用 ZPX 下载地址的 plugins-zpx.json。
   会将 JSON 中的 base64 图片转换为图片文件放入 dist/images/logo，
   并替换为 EdgeOne 静态访问地址。
   如果存在 ZTOOLS_SERVER_TOKEN，会在最后把 dist/plugins.json 同步到 ZTools 平台。
@@ -130,6 +142,253 @@ async function downloadFileWithRetry(url, destPath, fileName) {
   }
 
   throw new Error(`已重试 ${DOWNLOAD_MAX_ATTEMPTS} 次仍失败: ${lastError.message}`);
+}
+
+/**
+ * 获取插件条目实际使用的下载地址字段。
+ * @param {Record<string, unknown>} plugin 插件市场条目
+ * @returns {string | null} 下载地址字段名；未声明时返回 null
+ */
+function getDownloadUrlKey(plugin) {
+  for (const key of ['downloadUrl', 'downloadURL', 'download_url']) {
+    if (typeof plugin[key] === 'string' && plugin[key].trim()) {
+      return key;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 从下载地址中提取 ZIP 文件名。
+ * @param {string} downloadUrl 插件下载地址
+ * @returns {string} ZIP 文件名
+ */
+function getZipFileName(downloadUrl) {
+  let fileName;
+
+  try {
+    fileName = basename(decodeURIComponent(new URL(downloadUrl).pathname));
+  } catch {
+    throw new Error(`无效的插件下载地址: ${downloadUrl}`);
+  }
+
+  if (!fileName.toLowerCase().endsWith('.zip')) {
+    throw new Error(`插件下载地址不是 ZIP: ${downloadUrl}`);
+  }
+
+  return fileName;
+}
+
+/**
+ * 收集 plugins.json 引用的 ZIP 及对应插件条目。
+ * @param {unknown} pluginsJson 插件市场清单
+ * @returns {Map<string, Array<Record<string, unknown>>>} ZIP 文件名到插件条目的映射
+ */
+export function collectReferencedZipAssets(pluginsJson) {
+  const referencedAssets = new Map();
+
+  for (const plugin of extractPluginsList(pluginsJson)) {
+    const downloadUrlKey = getDownloadUrlKey(plugin);
+    if (!downloadUrlKey) {
+      throw new Error(`插件 ${normalizeString(plugin.name) || '<unknown>'} 缺少下载地址`);
+    }
+
+    const fileName = getZipFileName(plugin[downloadUrlKey]);
+    const references = referencedAssets.get(fileName) || [];
+    references.push(plugin);
+    referencedAssets.set(fileName, references);
+  }
+
+  return referencedAssets;
+}
+
+/**
+ * 读取并校验插件目录根部的 plugin.json。
+ * @param {string} sourceDir 插件目录
+ * @returns {Promise<Record<string, unknown>>} 解析后的插件配置
+ */
+async function readPluginConfig(sourceDir) {
+  const pluginJsonPath = join(sourceDir, 'plugin.json');
+  if (!existsSync(pluginJsonPath)) {
+    throw new Error('ZIP 根目录缺少 plugin.json');
+  }
+
+  const pluginConfig = JSON.parse(await readFile(pluginJsonPath, 'utf-8'));
+  if (!pluginConfig || typeof pluginConfig !== 'object' || Array.isArray(pluginConfig)) {
+    throw new Error('plugin.json 必须是对象');
+  }
+
+  return pluginConfig;
+}
+
+/**
+ * 校验包内插件身份与市场条目一致。
+ * @param {Record<string, unknown>} pluginConfig 包内 plugin.json
+ * @param {Array<Record<string, unknown>>} references 引用该包的市场条目
+ * @param {string} packageName 用于错误信息的包名
+ * @returns {void}
+ */
+function validatePluginIdentity(pluginConfig, references, packageName) {
+  const actualName = normalizeString(pluginConfig.name);
+  const actualVersion = normalizeString(pluginConfig.version);
+
+  for (const plugin of references) {
+    const expectedName = normalizeString(plugin.name);
+    const expectedVersion = normalizeString(plugin.version);
+
+    if (expectedName && actualName !== expectedName) {
+      throw new Error(`${packageName} 的插件名不一致: ${actualName} !== ${expectedName}`);
+    }
+    if (expectedVersion && actualVersion !== expectedVersion) {
+      throw new Error(`${packageName} 的插件版本不一致: ${actualVersion} !== ${expectedVersion}`);
+    }
+  }
+}
+
+/**
+ * 验证 ZPX 可以解压为 ASAR，并读取根部 plugin.json。
+ * @param {string} zpxPath 待验证的 ZPX 路径
+ * @param {string} workDir 验证临时目录
+ * @param {Array<Record<string, unknown>>} references 引用该包的市场条目
+ * @returns {Promise<Record<string, unknown>>} ZPX 内的插件配置
+ */
+async function validateZpx(zpxPath, workDir, references) {
+  const validationAsarPath = join(workDir, 'validation.asar');
+
+  // 实际执行 Brotli 解压，避免只生成了扩展名正确但内容损坏的文件。
+  await pipeline(
+    createReadStream(zpxPath),
+    createBrotliDecompress(),
+    createWriteStream(validationAsarPath),
+  );
+
+  asar.uncache(validationAsarPath);
+  const files = asar.listPackage(validationAsarPath);
+  if (!files.some(file => file.replace(/^\/+/, '') === 'plugin.json')) {
+    throw new Error(`${basename(zpxPath)} 内缺少 plugin.json`);
+  }
+
+  const pluginConfig = JSON.parse(asar.extractFile(validationAsarPath, 'plugin.json').toString('utf-8'));
+  validatePluginIdentity(pluginConfig, references, basename(zpxPath));
+  return pluginConfig;
+}
+
+/**
+ * 将插件目录打包为 Brotli 压缩的 ZPX。
+ * @param {string} sourceDir 插件源目录
+ * @param {string} outputPath ZPX 输出路径
+ * @param {Array<Record<string, unknown>>} references 引用该包的市场条目
+ * @returns {Promise<{fileName: string, size: number, pluginConfig: Record<string, unknown>}>} ZPX 产物信息
+ */
+export async function packDirectoryAsZpx(sourceDir, outputPath, references = []) {
+  const resolvedOutputPath = resolve(outputPath);
+  const workDir = await mkdtemp(join(tmpdir(), 'ztools-zpx-'));
+  const temporaryAsarPath = join(workDir, 'plugin.asar');
+  const temporaryZpxPath = join(
+    dirname(resolvedOutputPath),
+    `.${basename(resolvedOutputPath)}.${process.pid}-${Date.now()}.tmp`,
+  );
+
+  await mkdir(dirname(resolvedOutputPath), { recursive: true });
+  await removeFileIfExists(temporaryZpxPath);
+
+  try {
+    const pluginConfig = await readPluginConfig(sourceDir);
+    validatePluginIdentity(pluginConfig, references, basename(outputPath));
+
+    // ZPX 固定为“标准 ASAR + Brotli”，unpack 在客户端安装阶段处理。
+    await asar.createPackage(sourceDir, temporaryAsarPath);
+    await pipeline(
+      createReadStream(temporaryAsarPath),
+      createBrotliCompress({
+        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 5 },
+      }),
+      createWriteStream(temporaryZpxPath),
+    );
+
+    await validateZpx(temporaryZpxPath, workDir, references);
+
+    // 只在完整验证后替换正式产物，避免部署不完整的 ZPX。
+    await removeFileIfExists(resolvedOutputPath);
+    await rename(temporaryZpxPath, resolvedOutputPath);
+    const outputStats = await stat(resolvedOutputPath);
+    return {
+      fileName: basename(resolvedOutputPath),
+      size: outputStats.size,
+      pluginConfig,
+    };
+  } finally {
+    await removeFileIfExists(temporaryZpxPath);
+    await rm(workDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * 将市场清单引用的 ZIP 逐个转换为 ZPX，原 ZIP 保持不变。
+ * @param {unknown} pluginsJson 插件市场清单
+ * @param {string} distDir Release 资产目录
+ * @returns {Promise<Map<string, {fileName: string, size: number, pluginConfig: Record<string, unknown>}>>} ZIP 文件名到 ZPX 产物的映射
+ */
+export async function convertReferencedZipAssets(pluginsJson, distDir = DIST_DIR) {
+  const referencedAssets = collectReferencedZipAssets(pluginsJson);
+  const convertedAssets = new Map();
+
+  console.log(`开始转换 ${referencedAssets.size} 个 ZIP 为 ZPX...`);
+
+  for (const [zipFileName, references] of referencedAssets) {
+    const zipPath = join(distDir, zipFileName);
+    if (!existsSync(zipPath)) {
+      throw new Error(`plugins.json 引用的 ZIP 不存在: ${zipFileName}`);
+    }
+
+    const extractedDir = await mkdtemp(join(tmpdir(), 'ztools-zip-'));
+    const zpxFileName = zipFileName.replace(/\.zip$/i, '.zpx');
+    const zpxPath = join(distDir, zpxFileName);
+
+    try {
+      console.log(`转换: ${zipFileName} → ${zpxFileName}`);
+      await extractZip(zipPath, { dir: resolve(extractedDir) });
+      const result = await packDirectoryAsZpx(extractedDir, zpxPath, references);
+      convertedAssets.set(zipFileName, result);
+      console.log(`✓ 转换完成: ${zpxFileName} (${(result.size / 1024).toFixed(2)} KB)`);
+    } catch (error) {
+      await removeFileIfExists(zpxPath);
+      throw new Error(`${zipFileName} 转换失败: ${error.message}`);
+    } finally {
+      await rm(extractedDir, { recursive: true, force: true });
+    }
+  }
+
+  return convertedAssets;
+}
+
+/**
+ * 基于 ZIP 清单生成使用 ZPX 下载地址的新清单。
+ * @param {unknown} pluginsJson 已更新为 CDN 地址的 ZIP 清单
+ * @param {Map<string, {fileName: string, size: number}>} convertedAssets ZIP 到 ZPX 产物的映射
+ * @returns {unknown} 使用 ZPX 下载地址和文件大小的新清单
+ */
+export function createZpxPluginsJson(pluginsJson, convertedAssets) {
+  const zpxPluginsJson = structuredClone(pluginsJson);
+
+  for (const plugin of extractPluginsList(zpxPluginsJson)) {
+    const downloadUrlKey = getDownloadUrlKey(plugin);
+    if (!downloadUrlKey) {
+      throw new Error(`插件 ${normalizeString(plugin.name) || '<unknown>'} 缺少下载地址`);
+    }
+
+    const zipFileName = getZipFileName(plugin[downloadUrlKey]);
+    const convertedAsset = convertedAssets.get(zipFileName);
+    if (!convertedAsset) {
+      throw new Error(`插件 ${normalizeString(plugin.name) || '<unknown>'} 缺少 ZPX 产物`);
+    }
+
+    plugin[downloadUrlKey] = `${PUBLIC_ASSET_BASE_URL}/${convertedAsset.fileName}`;
+    plugin.size = convertedAsset.size;
+  }
+
+  return zpxPluginsJson;
 }
 
 function rewriteReleaseAssetUrls(value) {
@@ -333,8 +592,26 @@ async function rewriteBase64ImageUrls(value, convertedImages, imageContext = {})
   };
 }
 
+/**
+ * 读取 dist 中的插件市场清单。
+ * @returns {Promise<unknown>} 解析后的 plugins.json
+ */
+async function readPluginsJson() {
+  const pluginsJsonPath = join(DIST_DIR, PLUGINS_JSON_FILE_NAME);
+
+  if (!existsSync(pluginsJsonPath)) {
+    throw new Error(`未找到 ${pluginsJsonPath}`);
+  }
+
+  return JSON.parse(await readFile(pluginsJsonPath, 'utf-8'));
+}
+
+/**
+ * 将原清单中的 GitHub Release 地址改为 EdgeOne ZIP 地址。
+ * @returns {Promise<void>} 更新完成后结束的 Promise
+ */
 async function updatePluginsJsonDownloadUrls() {
-  const pluginsJsonPath = join(DIST_DIR, 'plugins.json');
+  const pluginsJsonPath = join(DIST_DIR, PLUGINS_JSON_FILE_NAME);
 
   if (!existsSync(pluginsJsonPath)) {
     console.warn(`未找到 ${pluginsJsonPath}，跳过下载地址更新`);
@@ -351,6 +628,20 @@ async function updatePluginsJsonDownloadUrls() {
   );
 
   console.log(`✓ 已更新 plugins.json 中 ${changedCount} 个 GitHub Release 下载地址`);
+}
+
+/**
+ * 写入使用 ZPX 下载地址的新插件市场清单。
+ * @param {Map<string, {fileName: string, size: number}>} convertedAssets ZIP 到 ZPX 产物的映射
+ * @returns {Promise<void>} 新清单写入完成后结束的 Promise
+ */
+async function writeZpxPluginsJson(convertedAssets) {
+  const pluginsJson = await readPluginsJson();
+  const zpxPluginsJson = createZpxPluginsJson(pluginsJson, convertedAssets);
+  const outputPath = join(DIST_DIR, ZPX_PLUGINS_JSON_FILE_NAME);
+
+  await writeFile(outputPath, `${JSON.stringify(zpxPluginsJson, null, 2)}\n`, 'utf-8');
+  console.log(`✓ 已生成 ${outputPath}`);
 }
 
 async function getJsonFiles(dir) {
@@ -477,7 +768,7 @@ async function syncPluginsToZToolsServer() {
     return;
   }
 
-  const pluginsJsonPath = join(DIST_DIR, 'plugins.json');
+  const pluginsJsonPath = join(DIST_DIR, PLUGINS_JSON_FILE_NAME);
   if (!existsSync(pluginsJsonPath)) {
     console.warn(`未找到 ${pluginsJsonPath}，跳过同步 ZTools 平台插件数据`);
     return;
@@ -560,14 +851,22 @@ async function main() {
     throw new Error(`assets 下载失败 ${failedAssets.length} 个: ${failedList}`);
   }
 
+  const pluginsJson = await readPluginsJson();
+  const convertedAssets = await convertReferencedZipAssets(pluginsJson);
   await updatePluginsJsonDownloadUrls();
+  await writeZpxPluginsJson(convertedAssets);
   await updateBase64ImagesInJsonFiles();
   await syncPluginsToZToolsServer();
 
   console.log(`\n✓ 所有 assets 已下载到 ${DIST_DIR} 目录`);
 }
 
-main().catch(error => {
-  console.error('执行失败:', error.message);
-  process.exit(1);
-});
+const isMainModule = process.argv[1]
+  && import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
+
+if (isMainModule) {
+  main().catch(error => {
+    console.error('执行失败:', error.message);
+    process.exit(1);
+  });
+}

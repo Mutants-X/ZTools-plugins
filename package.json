@@ -6,7 +6,12 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/download-latest-assets.js",
-    "download:latest-assets": "node scripts/download-latest-assets.js"
+    "download:latest-assets": "node scripts/download-latest-assets.js",
+    "test": "node --test scripts/download-latest-assets.test.js"
+  },
+  "dependencies": {
+    "@electron/asar": "^3.4.1",
+    "extract-zip": "^2.0.1"
   },
   "engines": {
     "node": ">=20.0.0"
