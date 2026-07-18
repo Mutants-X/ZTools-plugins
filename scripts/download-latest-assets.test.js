@@ -8,8 +8,10 @@ import { pipeline } from 'node:stream/promises';
 import { createBrotliDecompress } from 'node:zlib';
 import test from 'node:test';
 import {
+  addZpxDownloadUrls,
+  addZpxDownloadUrlsToPluginsJson,
   collectReferencedZipAssets,
-  createZpxPluginsJson,
+  normalizePluginForServer,
   packDirectoryAsZpx,
 } from './download-latest-assets.js';
 
@@ -34,7 +36,7 @@ test('collectReferencedZipAssets groups entries by their ZIP asset', () => {
   assert.equal(assets.get('demo-1.0.0.zip').length, 2);
 });
 
-test('createZpxPluginsJson preserves the ZIP manifest and replaces URL and size', () => {
+test('addZpxDownloadUrls preserves ZIP fields and adds the ZPX URL', () => {
   const pluginsJson = [
     {
       name: 'demo',
@@ -47,12 +49,54 @@ test('createZpxPluginsJson preserves the ZIP manifest and replaces URL and size'
     ['demo-1.0.0.zip', { fileName: 'demo-1.0.0.zpx', size: 80 }],
   ]);
 
-  const zpxPluginsJson = createZpxPluginsJson(pluginsJson, convertedAssets);
+  const updatedPluginsJson = addZpxDownloadUrls(pluginsJson, convertedAssets);
 
   assert.equal(pluginsJson[0].downloadUrl, 'https://ztools.zosen.link/demo-1.0.0.zip');
   assert.equal(pluginsJson[0].size, 100);
-  assert.equal(zpxPluginsJson[0].downloadUrl, 'https://ztools.zosen.link/demo-1.0.0.zpx');
-  assert.equal(zpxPluginsJson[0].size, 80);
+  assert.equal(pluginsJson[0].zpxDownloadUrl, undefined);
+  assert.equal(updatedPluginsJson[0].downloadUrl, 'https://ztools.zosen.link/demo-1.0.0.zip');
+  assert.equal(updatedPluginsJson[0].zpxDownloadUrl, 'https://ztools.zosen.link/demo-1.0.0.zpx');
+  assert.equal(updatedPluginsJson[0].size, 100);
+});
+
+test('normalizePluginForServer includes both download URLs', () => {
+  const plugin = normalizePluginForServer({
+    name: 'demo',
+    version: '1.0.0',
+    downloadUrl: 'https://ztools.zosen.link/demo-1.0.0.zip',
+    zpxDownloadUrl: 'https://ztools.zosen.link/demo-1.0.0.zpx',
+  });
+
+  assert.equal(plugin.downloadUrl, 'https://ztools.zosen.link/demo-1.0.0.zip');
+  assert.equal(plugin.zpxDownloadUrl, 'https://ztools.zosen.link/demo-1.0.0.zpx');
+});
+
+test('addZpxDownloadUrlsToPluginsJson updates the original manifest and removes the legacy one', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ztools-zpx-manifest-test-'));
+  const pluginsJsonPath = join(root, 'plugins.json');
+  const legacyPluginsJsonPath = join(root, 'plugins-zpx.json');
+  const convertedAssets = new Map([
+    ['demo-1.0.0.zip', { fileName: 'demo-1.0.0.zpx', size: 80 }],
+  ]);
+
+  try {
+    await writeFile(pluginsJsonPath, JSON.stringify([{
+      name: 'demo',
+      version: '1.0.0',
+      downloadUrl: 'https://ztools.zosen.link/demo-1.0.0.zip',
+      size: 100,
+    }]));
+    await writeFile(legacyPluginsJsonPath, '[]');
+
+    await addZpxDownloadUrlsToPluginsJson(convertedAssets, root);
+
+    const pluginsJson = JSON.parse(await readFile(pluginsJsonPath, 'utf-8'));
+    assert.equal(pluginsJson[0].downloadUrl, 'https://ztools.zosen.link/demo-1.0.0.zip');
+    assert.equal(pluginsJson[0].zpxDownloadUrl, 'https://ztools.zosen.link/demo-1.0.0.zpx');
+    await assert.rejects(readFile(legacyPluginsJsonPath), { code: 'ENOENT' });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('packDirectoryAsZpx creates a Brotli-compressed readable ASAR', async () => {
