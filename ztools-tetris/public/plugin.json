@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/@ztools-center/ztools-api-types/resource/ztools.schema.json",
+  "name": "ztools-tetris",
+  "title": "俄罗斯方块",
+  "description": "俄罗斯方块游戏，支持计分、等级、下一块预览、暂停与最高分记录",
+  "author": "zzx221",
+  "version": "1.0.0",
+  "main": "index.html",
+  "preload": "preload/services.js",
+  "logo": "logo.png",
+  "development": {
+    "main": "http://127.0.0.1:5173"
+  },
+  "features": [
+    {
+      "code": "tetris",
+      "explain": "俄罗斯方块游戏",
+      "icon": "logo.png",
+      "cmds": ["俄罗斯方块", "tetris", "方块游戏"]
+    }
+  ]
+}

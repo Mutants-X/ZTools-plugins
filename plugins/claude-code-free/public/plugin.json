@@ -1,0 +1,21 @@
+{
+  "name": "claude-code-free",
+  "title": "Claude Code Free",
+  "description": "在隔离的 Node 和配置环境中运行 Claude Code",
+  "version": "0.1.0",
+  "author": "Zing",
+  "platform": ["darwin", "win32"],
+  "main": "index.html",
+  "logo": "logo.png",
+  "preload": "preload.js",
+  "development": {
+    "main": "http://localhost:5181"
+  },
+  "features": [
+    {
+      "code": "open",
+      "explain": "打开 Claude Code Free",
+      "cmds": ["claude-code-free", "claude free", "claude code", "Claude Code"]
+    }
+  ]
+}

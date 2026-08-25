@@ -15,7 +15,8 @@
     {
       "code": "shortcut-capture",
       "explain": "截图",
-      "cmds": ["shortcutCapture", "sc", "截屏", "截图"]
+      "cmds": ["shortcutCapture", "sc", "截屏", "截图"],
+      "mainHide": true
     },
     {
       "code": "shortcut-capture-copy",

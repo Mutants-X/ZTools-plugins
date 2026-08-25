@@ -1,0 +1,9 @@
+{
+  "name": "claude-code-free-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.220",
+    "node-pty": "1.1.0"
+  }
+}

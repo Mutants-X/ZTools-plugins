@@ -3,9 +3,10 @@
   "title": "OCR 翻译",
   "description": "识别图片文字并跳转到翻译插件",
   "author": "FAR",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "main": "index.html",
   "preload": "preload/services.js",
+  "unpack": "local-ocr-runtime/*/**",
   "logo": "logo.png",
   "pluginSetting": {
     "single": false

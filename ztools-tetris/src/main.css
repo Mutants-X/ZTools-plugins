@@ -1,0 +1,85 @@
+/* ============================================================
+   全局主题：透明背景 + 语义化 CSS 变量，适配 ZTools 宿主主题
+   ============================================================ */
+:root {
+  --bg-app: transparent;
+  --bg-surface: rgba(245, 245, 245, 0.72);
+  --bg-surface-strong: rgba(255, 255, 255, 0.85);
+  --text-primary: #333333;
+  --text-secondary: #666666;
+  --text-tertiary: #999999;
+  --border-color: rgba(0, 0, 0, 0.08);
+  --board-bg: rgba(255, 255, 255, 0.32);
+  --grid-line: rgba(0, 0, 0, 0.06);
+  --overlay-bg: rgba(255, 255, 255, 0.28);
+  --accent: var(--plugin-primary-color, #4f7dff);
+  --accent-soft: rgba(79, 125, 255, 0.14);
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+  --radius: 12px;
+  --radius-sm: 8px;
+  --mono: 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-surface: rgba(42, 44, 56, 0.72);
+    --bg-surface-strong: rgba(30, 32, 42, 0.9);
+    --text-primary: #e8e8ea;
+    --text-secondary: #a8a8b0;
+    --text-tertiary: #70707a;
+    --border-color: rgba(255, 255, 255, 0.1);
+    --board-bg: rgba(18, 20, 28, 0.45);
+    --grid-line: rgba(255, 255, 255, 0.06);
+    --overlay-bg: rgba(10, 10, 16, 0.45);
+    --accent-soft: rgba(106, 150, 255, 0.18);
+    --shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  }
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button {
+  font-family: inherit;
+  border: none;
+  cursor: pointer;
+}
+
+kbd {
+  display: inline-block;
+  min-width: 20px;
+  padding: 1px 6px;
+  border: 1px solid var(--border-color);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--bg-surface-strong);
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--text-tertiary);
+  border-radius: 4px;
+}

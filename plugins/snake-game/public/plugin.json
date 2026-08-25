@@ -1,0 +1,24 @@
+{
+  "name": "snake-game",
+  "title": "贪吃蛇",
+  "description": "一款适配 ZTools 主题的经典贪吃蛇小游戏",
+  "author": "Zing",
+  "version": "1.0.0",
+  "main": "index.html",
+  "preload": "preload.js",
+  "logo": "logo.png",
+  "development": {
+    "main": "http://127.0.0.1:15180/"
+  },
+  "features": [
+    {
+      "code": "snake-game",
+      "explain": "打开贪吃蛇小游戏",
+      "cmds": [
+        "贪吃蛇",
+        "snake",
+        "snake game"
+      ]
+    }
+  ]
+}

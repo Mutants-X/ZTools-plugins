@@ -1,5 +1,6 @@
 const fs = require('node:fs')
 const path = require('node:path')
+const os = require('node:os')
 const crypto = require('node:crypto')
 const { spawn } = require('node:child_process')
 const { clipboard } = require('electron')
@@ -74,13 +75,28 @@ const sha256 = (content, encoding = 'hex') => crypto.createHash('sha256').update
 
 const hmac = (key, content, encoding) => crypto.createHmac('sha256', key).update(content).digest(encoding)
 
-const getServerDir = () => path.resolve(__dirname, '..', 'local-ocr-server')
+/**
+ * 将 ASAR 虚拟路径转换为 unpack 目录中的实体路径。
+ * @param {string} filePath 插件文件路径
+ * @returns {string} 可交给外部进程使用的实体路径
+ */
+const resolveUnpackedPath = (filePath) => filePath.replace(/\.asar(?=[/\\]|$)/, '.asar.unpacked')
 
-const getPidFile = () => path.join(getServerDir(), '.server.pid')
+/**
+ * 获取本地 OCR 服务 PID 文件路径。
+ * @returns {string} 系统临时目录中的 PID 文件路径
+ */
+const getPidFile = () => path.join(os.tmpdir(), 'ztools-ocr-new-server.pid')
 
+/**
+ * 查找当前平台随插件分发的 OCR 运行时。
+ * @returns {{executablePath: string, cwd: string} | null} 运行时信息；未集成时返回 null
+ */
 const getBundledRuntime = () => {
   const executableName = process.platform === 'win32' ? 'rapidocr-server.exe' : 'rapidocr-server'
-  const runtimeRoot = path.resolve(__dirname, '..', 'local-ocr-runtime', process.platform)
+  const runtimeRoot = resolveUnpackedPath(
+    path.resolve(__dirname, '..', 'local-ocr-runtime', process.platform)
+  )
   const candidates = [
     path.join(runtimeRoot, executableName),
     path.join(runtimeRoot, 'rapidocr-server', executableName)

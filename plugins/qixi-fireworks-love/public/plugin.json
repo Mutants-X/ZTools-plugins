@@ -1,0 +1,25 @@
+{
+  "name": "qixi-fireworks-love",
+  "title": "七夕星愿",
+  "description": "为尹向前绽放一场七夕浪漫烟花告白",
+  "author": "Zing",
+  "version": "1.0.0",
+  "main": "index.html",
+  "preload": "preload.js",
+  "logo": "logo.png",
+  "development": {
+    "main": "http://127.0.0.1:15181/"
+  },
+  "features": [
+    {
+      "code": "qixi-fireworks-love",
+      "explain": "打开写给尹向前的七夕烟花告白",
+      "cmds": [
+        "七夕表白",
+        "浪漫烟花",
+        "尹向前",
+        "七夕星愿"
+      ]
+    }
+  ]
+}

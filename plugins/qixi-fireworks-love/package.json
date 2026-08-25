@@ -1,0 +1,19 @@
+{
+  "name": "qixi-fireworks-love",
+  "version": "1.0.0",
+  "description": "写给尹向前的七夕烟花告白",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "vue": "^3.5.22"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.1",
+    "vite": "^7.1.11"
+  }
+}
